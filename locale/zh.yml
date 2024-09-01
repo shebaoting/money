@@ -1,0 +1,73 @@
+shebaoting-money:
+  admin:
+    settings:
+      title: 设置
+      initialmoney: 新用户的初始资金
+      moneyforpost: 每个新帖奖励的金额
+      moneyfordiscussion: 每个新讨论奖励的金额
+      moneyname: "货币的名称（例如：[money] 积分）"
+      postminimumlength: 获得奖励的帖子最小长度（设置为 0 以禁用）
+      noshowzero: 如果值为零则不显示
+      autoremove: 自动更新货币
+      moneyforlike: 帖子被点赞时奖励的金额
+      helpextensionlikes: 需要 <code>flarum/likes</code> 扩展
+    permissions:
+      edit_money_label: 编辑货币
+    autoremove:
+      0: 永不删除货币
+      1: 当讨论/帖子被隐藏或恢复时（默认）
+      2: 当讨论/帖子被删除时
+    automoderator:
+      metric_name: 货币
+      action_name: 奖励货币
+  forum:
+    user_controls:
+      money_button: 编辑货币
+    errors:
+      not_enough_money: 您的金币不足
+      no_money_logs: 没有记录
+    modal:
+      title: "{username} 的货币"
+      current: "当前:"
+      submit_button: => core.ref.save_changes
+    log_time: "时间"
+    log_type: "类型"
+    log_amount: "数额"
+    log_balance: "余额"
+    log_description: "描述"
+    log_type_deposit: "存款"
+    log_type_withdrawal: "取款"
+    log_type_transfer: "转账"
+    log_type_reward: "奖励"
+    no_money_logs: "暂无积分记录"
+    load_more: "加载更多"
+    logs_description:
+      posted_reply: "回复了讨论：{title}"
+      posted_in_discussion: "在讨论中回复：{title}"
+      post_restored: "恢复了讨论中的帖子：{title}"
+      post_hidden: "隐藏了讨论中的帖子：{title}"
+      post_deleted: "删除了讨论中的帖子：{title}"
+      discussion_started: "发起了讨论：{title}"
+      discussion_restored: "恢复了讨论：{title}"
+      discussion_hidden: "隐藏了讨论：{title}"
+      discussion_deleted: "删除了讨论：{title}"
+      liked: "点赞了 {user} 在讨论 {title} 下的回复"
+      liked_by_others: "在讨论 {title} 下的回复被 {user} 点赞"
+      admin_updated: "管理员更新了 {amount} 金币"
+      initial_registration: "注册奖励"
+    logs_type:
+      discussion_started: "发起讨论"
+      post_created: "发表帖子"
+      post_restored: "帖子恢复"
+      post_hidden: "帖子隐藏"
+      post_deleted: "帖子删除"
+      discussion_restored: "讨论恢复"
+      discussion_hidden: "讨论隐藏"
+      discussion_deleted: "讨论删除"
+      liked: "点赞帖子"
+      liked_by_others: "帖子被他人点赞"
+      admin_updated: "管理员更新"
+      registration: "注册奖励"
+      discussion_replied: "回复讨论"
+
+

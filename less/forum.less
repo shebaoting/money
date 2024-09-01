@@ -1,0 +1,29 @@
+.NotificationGrid {
+  width: 100%;
+  border-collapse: collapse; // 确保表格边框不重复
+
+  th, td {
+    padding: 10px; // 设置单元格的内边距
+    text-align: left; // 默认左对齐
+  }
+
+  th {
+    font-weight: bold; // 设置表头字体加粗
+  }
+
+  tr {
+    &:nth-child(even) {
+      background-color: #f9f9f9; // 偶数行的背景色
+    }
+  }
+
+  .NotificationGrid-groupToggle {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .NotificationGrid-checkbox {
+    padding: 8px 8px;
+    text-align: center;
+  }
+}
