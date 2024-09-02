@@ -49,7 +49,7 @@ php flarum cache:clear
 ```
 
 ## Links
-
+* [My Community](https://wyz.xyz)
 - [Packagist](https://packagist.org/packages/shebaoting/money)
 - [GitHub](https://github.com/shebaoting/money)
 - [Discuss](https://discuss.flarum.org/d/PUT_DISCUSS_SLUG_HERE)
