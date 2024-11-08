@@ -1,0 +1,1799 @@
+extend.php
+```
+<?php
+
+/*
+ * This file is part of shebaoting/money.
+ *
+ * Copyright (c) 2024 Shebaoting.
+ *
+ * For the full copyright and license information, please view the LICENSE.md
+ * file that was distributed with this source code.
+ */
+
+namespace Shebaoting\Money;
+
+use Flarum\Extend;
+use Flarum\Api\Serializer\UserSerializer;
+use Flarum\Post\Event\Posted;
+use Flarum\Post\Event\Restored as PostRestored;
+use Flarum\Post\Event\Hidden as PostHidden;
+use Flarum\Post\Event\Deleted as PostDeleted;
+use Flarum\Discussion\Event\Started;
+use Flarum\Discussion\Event\Restored as DiscussionRestored;
+use Flarum\Discussion\Event\Hidden as DiscussionHidden;
+use Flarum\Discussion\Event\Deleted as DiscussionDeleted;
+use Flarum\User\Event\Saving;
+use Flarum\Post\Event\Saving as SavingPost;
+use Flarum\Likes\Event\PostWasLiked;
+use Flarum\Likes\Event\PostWasUnliked;
+use Flarum\Discussion\Event\Saving as SavingDiscussion;
+use Flarum\User\Event\Registered;
+use Shebaoting\Money\Controller\UserMoneyLogsController;
+
+$extend = [
+    (new Extend\Frontend('forum'))
+        ->js(__DIR__ . '/js/dist/forum.js')
+        ->css(__DIR__ . '/less/forum.less')
+        ->route('/money-log', 'user.money-log'),
+
+    (new Extend\Frontend('admin'))
+        ->js(__DIR__ . '/js/dist/admin.js')
+        ->css(__DIR__ . '/less/admin.less'),
+
+    new Extend\Locales(__DIR__ . '/locale'),
+
+    (new Extend\ApiSerializer(UserSerializer::class))
+        ->attributes(AddUserMoneyAttributes::class),
+
+    (new Extend\Settings())
+        ->serializeToForum('shebaoting-money.moneyname', 'shebaoting-money.moneyname')
+        ->serializeToForum('shebaoting-money.level_names', 'shebaoting-money.level_names')
+        ->serializeToForum('shebaoting-money.money_scale', 'shebaoting-money.money_scale')
+        ->serializeToForum('shebaoting-money.noshowzero', 'shebaoting-money.noshowzero'),
+
+    (new Extend\Event())
+        ->listen(SavingPost::class, [Listeners\GiveMoney::class, 'postWillBeSaved'])
+        ->listen(SavingDiscussion::class, [Listeners\GiveMoney::class, 'discussionWillBeSaved'])
+        ->listen(Posted::class, [Listeners\GiveMoney::class, 'postWasPosted'])
+        ->listen(PostRestored::class, [Listeners\GiveMoney::class, 'postWasRestored'])
+        ->listen(PostHidden::class, [Listeners\GiveMoney::class, 'postWasHidden'])
+        ->listen(PostDeleted::class, [Listeners\GiveMoney::class, 'postWasDeleted'])
+        ->listen(Started::class, [Listeners\GiveMoney::class, 'discussionWasStarted'])
+        ->listen(DiscussionRestored::class, [Listeners\GiveMoney::class, 'discussionWasRestored'])
+        ->listen(DiscussionHidden::class, [Listeners\GiveMoney::class, 'discussionWasHidden'])
+        ->listen(DiscussionDeleted::class, [Listeners\GiveMoney::class, 'discussionWasDeleted'])
+        ->listen(Saving::class, [Listeners\GiveMoney::class, 'userWillBeSaved'])
+        ->listen(Registered::class, [Listeners\GiveMoney::class, 'userWasRegistered']),
+
+    (new Extend\Routes('api'))
+        ->get('/money-log', 'money.logs', UserMoneyLogsController::class)
+];
+
+if (class_exists('Flarum\Likes\Event\PostWasLiked')) {
+    $extend[] =
+        (new Extend\Event())
+        ->listen(PostWasLiked::class, [Listeners\GiveMoney::class, 'postWasLiked'])
+        ->listen(PostWasUnliked::class, [Listeners\GiveMoney::class, 'postWasUnliked']);
+}
+return $extend;
+
+```
+
+migrations/2017_01_20_000000_add_money_to_users_table.php
+```
+<?php
+
+use Flarum\Database\Migration;
+
+return Migration::addColumns('users', [
+    'money' => ['integer']
+]);
+
+```
+
+migrations/2017_01_22_000000_change_money_to_float.php
+```
+<?php
+
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Database\Schema\Builder;
+
+return [
+    'up' => function (Builder $schema) {
+        $schema->table('users', function (Blueprint $table) {
+            $table->float('money')->default(0)->change();
+        });
+    },
+    'down' => function (Builder $schema) {
+        $schema->table('users', function (Blueprint $table) {
+            $table->integer('money')->default(0)->change();
+        });
+    }
+];
+
+```
+
+migrations/2024_09_01_000000_create_money_logs_table.php
+```
+<?php
+
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Database\Schema\Builder;
+
+return [
+    'up' => function (Builder $schema) {
+        $schema->create('money_logs', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedInteger('user_id');  // 用户ID
+            $table->float('amount');             // 积分变动数量
+            $table->float('balance');            // 变动后的积分余额
+            $table->string('action');            // 动作类型
+            $table->text('reason')->nullable();  // 积分变动原因
+            $table->unsignedInteger('target_user_id')->nullable();    // 目标用户ID
+            $table->unsignedInteger('post_id')->nullable();           // 帖子ID
+            $table->unsignedInteger('discussion_id')->nullable();     // 讨论ID
+            $table->timestamps();
+        });
+    },
+    'down' => function (Builder $schema) {
+        $schema->dropIfExists('money_logs');
+    }
+];
+
+```
+
+locale/en.yml
+```
+shebaoting-money:
+  admin:
+    settings:
+      title: Settings
+      initialmoney: Initial Money for New Users
+      moneyforpost: Money given for a new post
+      moneyfordiscussion: Money given for a new discussion
+      moneyname: "Name of the money (ex: [money] points)"
+      postminimumlength: Post minimum length to get the money (0 to disable)
+      noshowzero: Do not show if the value is zero
+      autoremove: Automatically update money
+      moneyforlike: Money given when a post is liked
+      helpextensionlikes: Requires the <code>flarum/likes</code> extension
+    permissions:
+      edit_money_label: Edit money
+    autoremove:
+      0: Never remove money
+      1: When a discussion/post is hidden or restored (default)
+      2: When a discussion/post is deleted
+    automoderator:
+      metric_name: Money
+      action_name: Give money
+  forum:
+    user_controls:
+      money_button: Edit money
+    modal:
+      title: "{username}'s money"
+      current: "Current:"
+      submit_button: => core.ref.save_changes
+    log_time: "Time"
+    log_type: "Type"
+    log_amount: "Amount"
+    log_balance: "Balance"
+    log_description: "Description"
+    log_type_deposit: "Deposit"
+    log_type_withdrawal: "Withdrawal"
+    log_type_transfer: "Transfer"
+    log_type_reward: "Reward"
+    no_money_logs: "No money logs available"
+    load_more: "Load more"
+    logs_description:
+      created_discussion: 'Created a discussion › <a href="{url}">{title}</a>'
+      created_reply: 'Created a reply › <a href="{url}">{title}</a>'
+      reply_received: 'Received a reply from {username} › <a href="{url}">{title}</a>'
+      liked: 'Liked a post › <a href="{url}">{title}</a> by {user}'
+      liked_by: 'Post liked by {username} › <a href="{url}">{title}</a>'
+      unliked_post: 'Unliked a post › <a href="{url}">{title}</a>'
+      unliked_by: 'Post unliked by {username} › <a href="{url}">{title}</a>'
+      initial_registration: "Received initial points upon registration."
+      admin_updated: "Admin updated points, amount changed by {amount}."
+      discussion_started: 'Started a discussion › <a href="{url}">{title}</a>'
+      discussion_restored: 'Restored a discussion › <a href="{url}">{title}</a>'
+      discussion_hidden: 'Hidden a discussion › <a href="{url}">{title}</a>'
+      discussion_deleted: 'Deleted a discussion › <a href="{url}">{title}</a>'
+    logs_type:
+      discussion_started: "Discussion Started"
+      post_created: "Post Created"
+      post_restored: "Post Restored"
+      post_hidden: "Post Hidden"
+      post_deleted: "Post Deleted"
+      discussion_restored: "Discussion Restored"
+      discussion_hidden: "Discussion Hidden"
+      discussion_deleted: "Discussion Deleted"
+      liked: "Liked Post"
+      liked_by_others: "Post Liked by Another User"
+      admin_updated: "Admin Updated"
+      registration: "Registration Bonus"
+      discussion_replied: "Replied in Discussion"
+
+
+
+```
+
+locale/zh.yml
+```
+shebaoting-money:
+  admin:
+    settings:
+      moneyforpost_label: "新帖变动金额"
+      moneyforpost_help: "创建新帖时增加或扣除的金额。"
+      moneyforpost_type: "积分变动类型"
+      moneyforreply_label: "回复变动金额"
+      moneyforreply_help: "回复讨论时增加或扣除的金额。"
+      moneyforreply_type: "积分变动类型"
+      moneyforreply_feedback: "是否回馈作者"
+      moneyforlike_label: "点赞帖子变动金额"
+      moneyforlike_help: "点赞帖子时增加或扣除的金额。"
+      moneyforlike_type: "积分变动类型"
+      moneyforlike_feedback: "是否回馈作者"
+      reward: "奖励"
+      deduct: "扣除"
+      feedback: "回馈作者"
+      no_feedback: "不回馈"
+      moneyname: "货币的名称（例如：[money] 积分）"
+      initialmoney: "新用户的初始资金"
+      autoremove: "自动更新货币"
+      noshowzero: "如果值为零则不显示"
+      initialmoney_help: "新用户注册时，初始赠与资金。"
+      level_names: "货币等级名称"
+      level_names_help: "多个等级名称用英文逗号分隔，比如：金豆,银豆,铜豆"
+      money_scale: "货币进制"
+      money_scale_help: "请输入用于分割积分的进制数，比如100。"
+    permissions:
+      edit_money_label: 编辑货币
+    autoremove:
+      0: 永不删除货币
+      1: 当讨论/帖子被隐藏或恢复时（默认）
+      2: 当讨论/帖子被删除时
+    automoderator:
+      metric_name: 货币
+      action_name: 奖励货币
+  forum:
+    user_controls:
+      money_button: 编辑货币
+    errors:
+      not_enough_money: 您的金币不足
+      no_money_logs: 没有记录
+    modal:
+      title: "{username} 的货币"
+      current: "当前:"
+      submit_button: => core.ref.save_changes
+    log_time: "时间"
+    log_type: "类型"
+    log_amount: "数额"
+    log_balance: "余额"
+    log_description: "描述"
+    log_type_deposit: "存款"
+    log_type_withdrawal: "取款"
+    log_type_transfer: "转账"
+    log_type_reward: "奖励"
+    no_money_logs: "暂无积分记录"
+    load_more: "加载更多"
+    logs_description:
+      created_discussion: '创建了主题 › <a href="{url}">{title}</a>'
+      created_reply: '创建了回复 › <a href="{url}">{title}</a>'
+      reply_received: '收到 {username} 的回复 › <a href="{url}">{title}</a>'
+      liked: '点赞了帖子 › <a href="{url}">{title}</a> by {user}'
+      liked_by: '被 {username} 点赞 › <a href="{url}">{title}</a>'
+      unliked_post: '取消点赞了帖子 › <a href="{url}">{title}</a>'
+      unliked_by: '被 {username} 取消点赞 › <a href="{url}">{title}</a>'
+      initial_registration: "注册时获得初始积分。"
+      admin_updated: "管理员更新了积分，变动数量为 {amount}。"
+      discussion_started: '发起了讨论 › <a href="{url}">{title}</a>'
+      discussion_restored: '恢复了讨论 › <a href="{url}">{title}</a>'
+      discussion_hidden: '隐藏了讨论 › <a href="{url}">{title}</a>'
+      discussion_deleted: '删除了讨论 › <a href="{url}">{title}</a>'
+      posted_reply: '回复了讨论 › <a href="{url}">{title}</a>'
+    logs_type:
+      discussion_started: "发起讨论"
+      post_created: "发表帖子"
+      post_restored: "帖子恢复"
+      post_hidden: "帖子隐藏"
+      post_deleted: "帖子删除"
+      discussion_restored: "讨论恢复"
+      discussion_hidden: "讨论隐藏"
+      discussion_deleted: "讨论删除"
+      liked: "点赞帖子"
+      liked_by_others: "帖子被他人点赞"
+      admin_updated: "管理员更新"
+      registration: "注册奖励"
+      discussion_replied: "回复讨论"
+    point_log:
+      title: '积分变动记录'
+      link: '积分记录'
+      empty_text: '没有找到积分变动记录。'
+      table:
+        headers:
+          date: '日期'
+          amount: '变动金额'
+          balance: '余额'
+          reason: '原因'
+      load_more: '加载更多'
+      no_permission: '您无权查看他人的积分记录。'
+
+
+
+```
+
+less/forum.less
+```
+.NotificationGrid {
+  width: 100%;
+  border-collapse: collapse; // 确保表格边框不重复
+
+  th, td {
+    padding: 10px; // 设置单元格的内边距
+    text-align: center; // 默认左对齐
+  }
+
+  th {
+    font-weight: bold; // 设置表头字体加粗
+  }
+
+  tr {
+    &:nth-child(even) {
+      background-color: #f9f9f9; // 偶数行的背景色
+    }
+  }
+
+  .NotificationGrid-groupToggle {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .NotificationGrid-checkbox {
+    padding: 8px 8px;
+    text-align: center;
+  }
+}
+
+```
+
+less/admin.less
+```
+.MoneySettingRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+
+  .FormControl {
+    flex: 1 1 auto;
+  }
+
+  select.FormControl {
+    flex: 0 0 auto;
+  }
+}
+
+```
+
+js/.yarnrc.yml
+```
+nodeLinker: node-modules
+
+```
+
+js/forum.ts
+```
+export * from './src/common';
+export * from './src/forum';
+
+```
+
+js/admin.ts
+```
+export * from './src/common';
+export * from './src/admin';
+
+```
+
+js/.yarn/install-state.gz
+```
+无法读取文件内容: 'utf-8' codec can't decode byte 0x8b in position 1: invalid start byte
+```
+
+js/src/admin/index.js
+```
+import app from 'flarum/admin/app';
+import Select from 'flarum/common/components/Select';
+import saveSettings from 'flarum/admin/utils/saveSettings';
+import Button from 'flarum/common/components/Button';
+
+app.initializers.add('shebaoting-money', () => {
+  app.extensionData
+    .for('shebaoting-money')
+    .registerSetting({
+      setting: 'shebaoting-money.moneyname',
+      label: app.translator.trans('shebaoting-money.admin.settings.moneyname'),
+      type: 'text',
+    })
+    .registerSetting({
+      setting: 'shebaoting-money.initialmoney',
+      label: app.translator.trans('shebaoting-money.admin.settings.initialmoney'),
+      type: 'number',
+      min: 0,
+      help: app.translator.trans('shebaoting-money.admin.settings.initialmoney_help'),
+    })
+    .registerSetting({
+      setting: 'shebaoting-money.level_names',
+      label: app.translator.trans('shebaoting-money.admin.settings.level_names'),
+      type: 'text',
+      help: app.translator.trans('shebaoting-money.admin.settings.level_names_help'),
+      placeholder: '金豆,银豆,铜豆',
+    })
+    .registerSetting({
+      setting: 'shebaoting-money.money_scale',
+      label: app.translator.trans('shebaoting-money.admin.settings.money_scale'),
+      type: 'number',
+      min: 1,
+      help: app.translator.trans('shebaoting-money.admin.settings.money_scale_help'),
+    })
+    // 注册新帖变动金额设置
+    .registerSetting(function () {
+      return (
+        <div className="Form-group">
+          <label>{app.translator.trans('shebaoting-money.admin.settings.moneyforpost_label')}</label>
+          <div className="MoneySettingRow" style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <input
+              className="FormControl"
+              type="number"
+              min="0"
+              step="any"
+              bidi={this.setting('shebaoting-money.moneyforpost')}
+              placeholder="0"
+              style={{ flex: '1 1 auto' }}
+            />
+            <Select
+              className="FormControl"
+              value={this.setting('shebaoting-money.moneyforpost_type')()}
+              options={{
+                reward: app.translator.trans('shebaoting-money.admin.settings.reward'),
+                deduct: app.translator.trans('shebaoting-money.admin.settings.deduct'),
+              }}
+              onchange={(value) => this.setting('shebaoting-money.moneyforpost_type')(value)}
+              style={{ flex: '0 0 auto' }}
+            />
+          </div>
+          <div className="helpText">{app.translator.trans('shebaoting-money.admin.settings.moneyforpost_help')}</div>
+        </div>
+      );
+    })
+    // 注册回复变动金额设置
+    .registerSetting(function () {
+      return (
+        <div className="Form-group">
+          <label>{app.translator.trans('shebaoting-money.admin.settings.moneyforreply_label')}</label>
+          <div className="MoneySettingRow" style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <input
+              className="FormControl"
+              type="number"
+              min="0"
+              step="any"
+              bidi={this.setting('shebaoting-money.moneyforreply')}
+              placeholder="0"
+              style={{ flex: '1 1 auto' }}
+            />
+            <Select
+              className="FormControl"
+              value={this.setting('shebaoting-money.moneyforreply_type')()}
+              options={{
+                reward: app.translator.trans('shebaoting-money.admin.settings.reward'),
+                deduct: app.translator.trans('shebaoting-money.admin.settings.deduct'),
+              }}
+              onchange={(value) => this.setting('shebaoting-money.moneyforreply_type')(value)}
+              style={{ flex: '0 0 auto' }}
+            />
+            <Select
+              className="FormControl"
+              value={this.setting('shebaoting-money.moneyforreply_feedback')()}
+              options={{
+                feedback: app.translator.trans('shebaoting-money.admin.settings.feedback'),
+                no_feedback: app.translator.trans('shebaoting-money.admin.settings.no_feedback'),
+              }}
+              onchange={(value) => this.setting('shebaoting-money.moneyforreply_feedback')(value)}
+              style={{ flex: '0 0 auto' }}
+            />
+          </div>
+          <div className="helpText">{app.translator.trans('shebaoting-money.admin.settings.moneyforreply_help')}</div>
+        </div>
+      );
+    })
+    // 注册点赞帖子变动金额设置
+    .registerSetting(function () {
+      return (
+        <div className="Form-group">
+          <label>{app.translator.trans('shebaoting-money.admin.settings.moneyforlike_label')}</label>
+          <div className="MoneySettingRow" style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <input
+              className="FormControl"
+              type="number"
+              min="0"
+              step="any"
+              bidi={this.setting('shebaoting-money.moneyforlike')}
+              placeholder="0"
+              style={{ flex: '1 1 auto' }}
+            />
+            <Select
+              className="FormControl"
+              value={this.setting('shebaoting-money.moneyforlike_type')()}
+              options={{
+                reward: app.translator.trans('shebaoting-money.admin.settings.reward'),
+                deduct: app.translator.trans('shebaoting-money.admin.settings.deduct'),
+              }}
+              onchange={(value) => this.setting('shebaoting-money.moneyforlike_type')(value)}
+              style={{ flex: '0 0 auto' }}
+            />
+            <Select
+              className="FormControl"
+              value={this.setting('shebaoting-money.moneyforlike_feedback')()}
+              options={{
+                feedback: app.translator.trans('shebaoting-money.admin.settings.feedback'),
+                no_feedback: app.translator.trans('shebaoting-money.admin.settings.no_feedback'),
+              }}
+              onchange={(value) => this.setting('shebaoting-money.moneyforlike_feedback')(value)}
+              style={{ flex: '0 0 auto' }}
+            />
+          </div>
+          <div className="helpText">{app.translator.trans('shebaoting-money.admin.settings.moneyforlike_help')}</div>
+        </div>
+      );
+    })
+    .registerSetting({
+      setting: 'shebaoting-money.autoremove',
+      label: app.translator.trans('shebaoting-money.admin.settings.autoremove'),
+      type: 'select',
+      options: {
+        0: app.translator.trans('shebaoting-money.admin.autoremove.0'),
+        1: app.translator.trans('shebaoting-money.admin.autoremove.1'),
+        2: app.translator.trans('shebaoting-money.admin.autoremove.2'),
+      },
+      default: '1',
+    })
+    .registerSetting({
+      setting: 'shebaoting-money.noshowzero',
+      label: app.translator.trans('shebaoting-money.admin.settings.noshowzero'),
+      type: 'checkbox',
+    })
+    .registerPermission(
+      {
+        icon: 'fas fa-money-bill',
+        label: app.translator.trans('shebaoting-money.admin.permissions.edit_money_label'),
+        permission: 'user.edit_money',
+      },
+      'moderate'
+    );
+});
+
+```
+
+js/src/forum/index.js
+```
+import app from 'flarum/forum/app';
+import { extend } from 'flarum/extend';
+import UserCard from 'flarum/components/UserCard';
+import UserControls from 'flarum/utils/UserControls';
+import Button from 'flarum/components/Button';
+import LinkButton from 'flarum/components/LinkButton';
+import UserMoneyModal from './components/UserMoneyModal';
+import Model from 'flarum/Model';
+import User from 'flarum/models/User';
+import PostControls from 'flarum/utils/PostControls';
+import UserMoneyLogPage from './components/UserMoneyLogPage';
+import PointLog from './models/PointLog';
+import UserPage from 'flarum/forum/components/UserPage';
+
+app.initializers.add('shebaoting-money', () => {
+  app.store.models['money-logs'] = PointLog;
+
+  User.prototype.canEditMoney = Model.attribute('canEditMoney');
+  app.routes['user.money-log'] = {
+    path: '/u/:username/money-log',
+    component: UserMoneyLogPage,
+  };
+  extend(UserCard.prototype, 'infoItems', function (items) {
+    const money = this.attrs.user.data.attributes['money'] || 0;
+    const moneyName = app.forum.attribute('shebaoting-money.moneyname') || '[money]';
+
+    // 获取后台设置的货币等级名称和进制
+    const levelNames = (app.forum.attribute('shebaoting-money.level_names') || '').split(',');
+    const scale = parseInt(app.forum.attribute('shebaoting-money.money_scale') || '100');
+
+    // 判断是否有设置货币等级名称
+    if (levelNames.length > 1 && levelNames[0] !== '') {
+      let remainingMoney = money;
+      let levelValues = [];
+
+      for (let i = 0; i < levelNames.length; i++) {
+        const levelValue = Math.floor(remainingMoney / Math.pow(scale, levelNames.length - 1 - i));
+        remainingMoney = remainingMoney % Math.pow(scale, levelNames.length - 1 - i);
+
+        // 给每个等级名称和数值之间增加一些间距
+        levelValues.push(m('span', { style: { marginRight: '15px' } }, `${levelNames[i]} ${levelValue}`));
+      }
+
+      items.add('money', m('div', levelValues)); // 使用 div 容器包裹
+    } else {
+      // 如果没有设置货币等级名称，则使用默认的货币名称
+      items.add('money', m('span', moneyName.replace('[money]', money)));
+    }
+  });
+
+  // 扩展 UserPage 的 navItems，添加“积分记录”链接
+  extend(UserPage.prototype, 'navItems', function (items) {
+    const user = this.user;
+
+    // 只有在查看自己的个人资料时才显示链接
+    if (app.session.user && app.session.user.id() === user.id()) {
+      items.add(
+        'moneyLogs',
+        LinkButton.component(
+          {
+            href: app.route('user.money-log', { username: user.username() }),
+            name: 'moneyLogs',
+            icon: 'fas fa-coins',
+          },
+          app.translator.trans('shebaoting-money.forum.point_log.link')
+        ),
+        10
+      );
+    }
+  });
+
+  extend(UserControls, 'moderationControls', (items, user) => {
+    if (user.canEditMoney()) {
+      items.add(
+        'money',
+        Button.component(
+          {
+            icon: 'fas fa-money-bill',
+            onclick: () => app.modal.show(UserMoneyModal, { user }),
+          },
+          app.translator.trans('shebaoting-money.forum.user_controls.money_button')
+        )
+      );
+    }
+  });
+
+  extend(PostControls, 'likeAction', function (items, post) {
+    const user = app.session.user;
+    const moneyForLike = parseFloat(app.forum.attribute('shebaoting-money.moneyforlike') || 0);
+
+    if (moneyForLike < 0 && user.money < Math.abs(moneyForLike)) {
+      items.add(
+        'like',
+        Button.component(
+          {
+            icon: 'fas fa-thumbs-up',
+            className: 'Button Button--link',
+            onclick: () => {
+              alert(app.translator.trans('shebaoting-money.forum.errors.not_enough_money'));
+            },
+          },
+          app.translator.trans('core.forum.post.like_link')
+        ),
+        20
+      );
+    } else {
+      // Call the original like functionality here
+      items.add(
+        'like',
+        Button.component(
+          {
+            icon: 'fas fa-thumbs-up',
+            className: 'Button Button--link',
+            onclick: () => {
+              post.save({ isLiked: !post.isLiked() });
+            },
+          },
+          app.translator.trans('core.forum.post.like_link')
+        ),
+        20
+      );
+    }
+  });
+});
+
+```
+
+js/src/forum/models/PointLog.js
+```
+import Model from 'flarum/common/Model';
+
+export default class PointLog extends Model {
+  createdAt = Model.attribute('createdAt', Model.transformDate);
+  balance = Model.attribute('balance');
+  amount = Model.attribute('amount');
+  reason = Model.attribute('reason');
+  action = Model.attribute('action');
+  targetUser = Model.attribute('targetUser');
+  post = Model.attribute('post');
+  discussion = Model.attribute('discussion');
+}
+
+```
+
+js/src/forum/components/UserMoneyModal.js
+```
+import Modal from 'flarum/components/Modal';
+import Button from 'flarum/components/Button';
+import Stream from 'flarum/utils/Stream';
+
+export default class UserMoneyModal extends Modal {
+  oninit(vnode) {
+    super.oninit(vnode);
+
+    this.money = Stream(this.attrs.user.data.attributes['money'] || 0.0);
+  }
+
+  className() {
+    return 'UserMoneyModal Modal--small';
+  }
+
+  title() {
+    return app.translator.trans('shebaoting-money.forum.modal.title', { user: this.attrs.user });
+  }
+
+  content() {
+    const moneyName = app.forum.attribute('shebaoting-money.moneyname') || '[money]';
+
+    return (
+      <div className="Modal-body">
+        <div className="Form">
+          <div className="Form-group">
+            <label>
+              {app.translator.trans('shebaoting-money.forum.modal.current')} {moneyName.replace('[money]', this.attrs.user.data.attributes['money'])}
+            </label>
+            <input required className="FormControl" type="number" step="any" bidi={this.money} />
+          </div>
+          <div className="Form-group">
+            {Button.component(
+              {
+                className: 'Button Button--primary',
+                type: 'submit',
+                loading: this.loading,
+              },
+              app.translator.trans('shebaoting-money.forum.modal.submit_button')
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  onsubmit(e) {
+    e.preventDefault();
+
+    this.loading = true;
+
+    this.attrs.user
+      .save({ money: this.money() }, { errorHandler: this.onerror.bind(this) })
+      .then(this.hide.bind(this))
+      .catch(() => {
+        this.loading = false;
+        m.redraw();
+      });
+  }
+}
+
+```
+
+js/src/forum/components/UserMoneyLogPage.js
+```
+import UserPage from 'flarum/forum/components/UserPage';
+import LoadingIndicator from 'flarum/common/components/LoadingIndicator';
+import Placeholder from 'flarum/common/components/Placeholder';
+import app from 'flarum/forum/app';
+
+export default class UserMoneyLogPage extends UserPage {
+  oninit(vnode) {
+    super.oninit(vnode);
+    this.loading = true;
+    this.logs = [];
+    this.page = 0;
+    this.moreResults = true;
+
+    // 确保用户已登录
+    if (!app.session.user) {
+      app.alerts.show({ type: 'error' }, app.translator.trans('core.forum.error.not_authenticated'));
+      m.route.set(app.route('index'));
+      return;
+    }
+
+    // 将当前用户设置为 this.user
+    this.user = app.session.user;
+
+    // 手动调用 onuserloaded
+    this.onuserloaded();
+  }
+
+  onuserloaded() {
+    this.loadLogs();
+  }
+
+  // 加载积分变动记录
+  loadLogs() {
+    if (!this.moreResults) return;
+
+    this.loading = true;
+
+    app.store
+      .find('money-log', {
+        page: { offset: this.page * 20 },
+      })
+      .then((logs) => {
+        console.log('logs', logs);
+        this.logs = this.logs.concat(logs);
+        this.loading = false;
+        this.page++;
+
+        if (logs.length < 20) {
+          this.moreResults = false;
+        }
+
+        m.redraw();
+      })
+      .catch((err) => {
+        console.error('Error loading logs:', err);
+        this.loading = false;
+        m.redraw();
+      });
+  }
+
+  content() {
+    return (
+      <div className="UserMoneyLogPage">
+        {this.loading && this.logs.length === 0 ? (
+          <LoadingIndicator />
+        ) : this.logs.length === 0 ? (
+          <Placeholder text={app.translator.trans('shebaoting-money.forum.point_log.empty_text')} />
+        ) : (
+          <div className="UserMoneyLogPage-content">
+            <table className="NotificationGrid">
+              <thead>
+                <tr>
+                  <th>
+                    <i aria-hidden="true" className="icon fas fa-clock"></i>
+                    {app.translator.trans('shebaoting-money.forum.point_log.table.headers.date')}
+                  </th>
+                  <th>
+                    <i aria-hidden="true" className="icon fas fa-list"></i>
+                    {app.translator.trans('shebaoting-money.forum.point_log.table.headers.amount')}
+                  </th>
+                  <th>
+                    <i aria-hidden="true" className="icon fas fa-coins"></i>
+                    {app.translator.trans('shebaoting-money.forum.point_log.table.headers.balance')}
+                  </th>
+                  <th>
+                    <i aria-hidden="true" className="icon fas fa-info-circle"></i>
+                    {app.translator.trans('shebaoting-money.forum.point_log.table.headers.reason')}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {this.logs.map((log) => {
+                  console.log(log);
+                  const action = log.action();
+                  let description = '';
+                  const balance = log.balance();
+                  const createdAt = new Date(log.createdAt()).toLocaleString();
+                  const amount = log.amount();
+                  // 构建原因描述
+                  if (action === 'post') {
+                    // 创建主题
+                    const discussion = log.discussion();
+                    const title = discussion ? discussion.title : '';
+                    const url = discussion ? app.route('discussion', { id: discussion.id, slug: discussion.slug }) : '#';
+
+                    description = app.translator.trans('shebaoting-money.forum.logs_description.created_discussion', {
+                      title,
+                      url,
+                    });
+                  } else if (action === 'reply') {
+                    // 创建回复
+                    const discussion = log.discussion();
+                    const title = discussion ? discussion.title : '';
+                    const url = discussion ? app.route('discussion', { id: discussion.id, slug: discussion.slug }) : '#';
+
+                    description = app.translator.trans('shebaoting-money.forum.logs_description.created_reply', {
+                      title,
+                      url,
+                    });
+                  } else if (action === 'reply_received') {
+                    // 收到回复
+                    const targetUser = log.targetUser();
+                    const username = targetUser ? targetUser.username : '';
+                    const discussion = log.discussion();
+                    const title = discussion ? discussion.title : '';
+                    const url = discussion ? app.route('discussion', { id: discussion.id, slug: discussion.slug }) : '#';
+
+                    description = app.translator.trans('shebaoting-money.forum.logs_description.reply_received', {
+                      username,
+                      title,
+                      url,
+                    });
+                  } else if (action === 'like') {
+                    // 点赞帖子
+                    const discussion = log.discussion();
+                    const title = discussion ? discussion.title : '';
+                    const url = discussion ? app.route('discussion', { id: discussion.id, slug: discussion.slug }) : '#';
+
+                    description = app.translator.trans('shebaoting-money.forum.logs_description.liked_post', {
+                      title,
+                      url,
+                    });
+                  } else if (action === 'liked_by') {
+                    // 被点赞
+                    const targetUser = log.targetUser();
+                    const username = targetUser ? targetUser.username : '';
+                    const discussion = log.discussion();
+                    const title = discussion ? discussion.title : '';
+                    const url = discussion ? app.route('discussion', { id: discussion.id, slug: discussion.slug }) : '#';
+
+                    description = app.translator.trans('shebaoting-money.forum.logs_description.liked_by', {
+                      username,
+                      title,
+                      url,
+                    });
+                  } else if (action === 'unlike') {
+                    // 取消点赞帖子
+                    const discussion = log.discussion();
+                    const title = discussion ? discussion.title : '';
+                    const url = discussion ? app.route('discussion', { id: discussion.id, slug: discussion.slug }) : '#';
+
+                    description = app.translator.trans('shebaoting-money.forum.logs_description.unliked_post', {
+                      title,
+                      url,
+                    });
+                  } else if (action === 'unliked_by') {
+                    // 被取消点赞
+                    const targetUser = log.targetUser();
+                    const username = targetUser ? targetUser.username : '';
+                    const discussion = log.discussion();
+                    const title = discussion ? discussion.title : '';
+                    const url = discussion ? app.route('discussion', { id: discussion.id, slug: discussion.slug }) : '#';
+
+                    description = app.translator.trans('shebaoting-money.forum.logs_description.unliked_by', {
+                      username,
+                      title,
+                      url,
+                    });
+                  } else {
+                    description = log.reason();
+                  }
+
+                  console.log('discussion', log.discussion());
+                  console.log('description', description, typeof description);
+                  // const descriptionString = description.join('');
+                  return (
+                    <tr key={log.id()}>
+                      <td>{createdAt}</td>
+                      <td>{amount}</td>
+                      <td>{balance}</td>
+                      <td>{m.trust(description)}</td> {/* 传递单一字符串 */}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            {this.moreResults && (
+              <div className="UserMoneyLogPage-loadMore">
+                <button className="Button Button--primary" onclick={() => this.loadLogs()}>
+                  {app.translator.trans('shebaoting-money.forum.point_log.load_more')}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+}
+
+```
+
+js/src/common/index.ts
+```
+import app from 'flarum/common/app';
+
+app.initializers.add('shebaoting/money', () => {
+  console.log('[shebaoting/money] Hello, forum and admin!');
+});
+
+```
+
+src/AddUserMoneyAttributes.php
+```
+<?php
+
+namespace Shebaoting\Money;
+
+use Flarum\Api\Serializer\UserSerializer;
+use Flarum\User\User;
+
+class AddUserMoneyAttributes
+{
+    public function __invoke(UserSerializer $serializer, User $user)
+    {
+        $canEditMoney = $serializer->getActor()->can('edit_money', $user);
+
+        $attributes = [];
+
+        $attributes['money'] = $user->money;
+        $attributes['canEditMoney'] = $canEditMoney;
+
+        return $attributes;
+    }
+}
+
+```
+
+src/Serializer/MoneyLogSerializer.php
+```
+<?php
+
+namespace Shebaoting\Money\Serializer;
+
+use Flarum\Api\Serializer\AbstractSerializer;
+
+class MoneyLogSerializer extends AbstractSerializer
+{
+    protected $type = 'money-logs';
+
+    protected function getDefaultAttributes($pointLog)
+    {
+        $attributes = [
+            'amount'    => $pointLog->amount,
+            'balance'    => $pointLog->balance,
+            'reason'    => $pointLog->reason,
+            'action'    => $pointLog->action,
+            'createdAt' => $this->formatDate($pointLog->created_at),
+        ];
+
+        if ($pointLog->targetUser) {
+            $attributes['targetUser'] = [
+                'id' => $pointLog->targetUser->id,
+                'username' => $pointLog->targetUser->username,
+            ];
+        }
+
+        if ($pointLog->post) {
+            $attributes['post'] = [
+                'id' => $pointLog->post->id,
+                'number' => $pointLog->post->number,
+            ];
+        }
+
+        if ($pointLog->discussion) {
+            $attributes['discussion'] = [
+                'id' => $pointLog->discussion->id,
+                'title' => $pointLog->discussion->title,
+                'slug' => $pointLog->discussion->slug,
+            ];
+        }
+
+        return $attributes;
+    }
+}
+
+```
+
+src/Controller/UserMoneyLogsController.php
+```
+<?php
+
+namespace Shebaoting\Money\Controller;
+
+use Flarum\Api\Controller\AbstractListController;
+use Psr\Http\Message\ServerRequestInterface;
+use Tobscure\JsonApi\Document;
+use Shebaoting\Money\Serializer\MoneyLogSerializer;
+use Shebaoting\Money\Model\MoneyLog;
+use Flarum\Http\UrlGenerator;
+
+class UserMoneyLogsController extends AbstractListController
+{
+    public $serializer = MoneyLogSerializer::class;
+
+    // 设置默认分页和最大分页数
+    public $limit = 20;
+    public $maxLimit = 50;
+
+    protected function data(ServerRequestInterface $request, Document $document)
+    {
+        // 获取当前登录用户
+        $actor = $request->getAttribute('actor');
+
+        // 提取分页参数
+        $limit = $this->extractLimit($request);
+        $offset = $this->extractOffset($request);
+
+        // 获取用户的积分变动记录，按时间倒序排序
+        $query = MoneyLog::where('user_id', $actor->id)
+            ->orderBy('created_at', 'desc')
+            ->skip($offset)
+            ->take($limit);
+
+        // 获取结果
+        $logs = $query->get();
+
+        // 获取 URL 生成器实例
+        $urlGenerator = app(UrlGenerator::class);
+
+        // 计算记录总数，用于分页链接
+        $total = MoneyLog::where('user_id', $actor->id)->count();
+
+        // 提取查询参数
+        $queryParams = $request->getQueryParams();
+
+        // 添加分页链接到文档
+        $document->addPaginationLinks(
+            $urlGenerator->to('api')->route('money.logs'),
+            $queryParams,  // 传递查询参数数组
+            $offset,
+            $limit,
+            $total
+        );
+
+        return $logs;
+    }
+}
+
+```
+
+src/Model/MoneyLog.php
+```
+<?php
+
+namespace Shebaoting\Money\Model;
+
+use Illuminate\Database\Eloquent\Model;
+use Flarum\User\User;
+use Flarum\Post\Post;
+use Flarum\Discussion\Discussion;
+
+class MoneyLog extends Model
+{
+    protected $table = 'money_logs';
+
+    protected $fillable = ['user_id', 'amount', 'action', 'reason', 'balance', 'target_user_id', 'post_id', 'discussion_id'];
+    public $timestamps = true; // 确保启用自动时间戳
+
+    public function user()
+    {
+        return $this->belongsTo('Flarum\User\User');
+    }
+
+    public function targetUser()
+    {
+        return $this->belongsTo(User::class, 'target_user_id');
+    }
+
+    public function post()
+    {
+        return $this->belongsTo(Post::class);
+    }
+
+    public function discussion()
+    {
+        return $this->belongsTo(Discussion::class);
+    }
+}
+
+```
+
+src/Event/MoneyUpdated.php
+```
+<?php
+
+namespace Shebaoting\Money\Event;
+
+use Flarum\User\User;
+
+class MoneyUpdated
+{
+    public $user;
+    /**
+     * @var float
+     */
+    public $amount;
+    /**
+     * @var string
+     */
+    public $description;
+    /**
+     * @var string
+     */
+    public $type;
+
+    /**
+     * 创建一个新的事件实例
+     *
+     * @param User $user
+     * @param float $amount
+     * @param string $type
+     * @param string $description
+     */
+    public function __construct(User $user, float $amount, string $type, string $description)
+    {
+        $this->user = $user;
+        $this->amount = $amount;
+        $this->type = $type;
+        $this->description = $description;
+    }
+}
+
+```
+
+src/Listeners/GiveMoney.php
+```
+<?php
+
+namespace Shebaoting\Money\Listeners;
+
+use Illuminate\Support\Arr;
+use Flarum\Settings\SettingsRepositoryInterface;
+use Illuminate\Contracts\Events\Dispatcher;
+use Flarum\User\User;
+use Flarum\Post\Event\Posted;
+use Flarum\Post\Event\Restored as PostRestored;
+use Flarum\Post\Event\Hidden as PostHidden;
+use Flarum\Post\Event\Deleted as PostDeleted;
+use Flarum\Discussion\Event\Started;
+use Flarum\Discussion\Event\Restored as DiscussionRestored;
+use Flarum\Discussion\Event\Hidden as DiscussionHidden;
+use Flarum\Discussion\Event\Deleted as DiscussionDeleted;
+use Flarum\Likes\Event\PostWasLiked;
+use Flarum\Likes\Event\PostWasUnliked;
+use Shebaoting\Money\Event\MoneyUpdated;
+use Shebaoting\Money\Model\MoneyLog;
+use Flarum\Post\Event\Saving;
+use Flarum\User\Event\Saving as SavingUser;
+use Flarum\Discussion\Event\Saving as SavingDiscussion;
+use Flarum\Foundation\ValidationException;
+use Flarum\User\Event\Registered;
+
+abstract class AutoRemoveEnum
+{
+    public const NEVER = 0;
+    public const HIDDEN = 1;
+    public const DELETED = 2;
+}
+
+class GiveMoney
+{
+    protected $settings;
+    protected $events;
+    protected $autoremove;
+    protected $url;
+
+    public function __construct(SettingsRepositoryInterface $settings, Dispatcher $events, \Flarum\Http\UrlGenerator $url)
+    {
+        $this->settings = $settings;
+        $this->events = $events;
+        $this->url = $url;
+        $this->autoremove = (int)$this->settings->get('shebaoting-money.autoremove', 1);
+    }
+
+    /**
+     * 给用户添加或扣除金额
+     *
+     * @param User|null $user 用户对象
+     * @param float $amount 积分变动数量
+     * @param string $action 动作类型
+     * @param string|null $description 积分变动原因
+     * @param User|null $targetUser 目标用户
+     * @param \Flarum\Post\Post|null $post 相关的帖子对象
+     * @param \Flarum\Discussion\Discussion|null $discussion 相关的讨论对象
+     */
+    public function giveMoney(?User $user, float $amount, string $action, string $description = null, User $targetUser = null, $post = null, $discussion = null)
+    {
+        if (!is_null($user)) {
+            // 更新用户的余额
+            $user->money += $amount;
+            $user->save();
+
+            // 获取更新后的余额
+            $balance = $user->money;
+
+            // 记录积分变动
+            MoneyLog::create([
+                'user_id' => $user->id,
+                'amount' => $amount,
+                'balance' => $balance,
+                'action' => $action,
+                'reason' => $description,
+                'target_user_id' => $targetUser ? $targetUser->id : null,
+                'post_id' => $post ? $post->id : null,
+                'discussion_id' => $discussion ? $discussion->id : ($post ? $post->discussion_id : null),
+            ]);
+
+            // 触发金额更新事件
+            $this->events->dispatch(new MoneyUpdated($user, $amount, $action, $description));
+        }
+    }
+
+    /**
+     * 帖子将要被保存时执行，检查用户余额是否足够
+     */
+    public function postWillBeSaved(Saving $event)
+    {
+        $money = (float)$this->settings->get('shebaoting-money.moneyforpost', 0);
+
+        if ($money < 0) {
+            $user = $event->actor;
+
+            if ($user->money < abs($money)) {
+                throw new ValidationException([
+                    'money' => app()->translator->trans('shebaoting-money.forum.errors.not_enough_money')
+                ]);
+            }
+        }
+    }
+
+    /**
+     * 讨论将要被保存时执行，检查用户余额是否足够
+     */
+    public function discussionWillBeSaved(SavingDiscussion $event)
+    {
+        $money = (float)$this->settings->get('shebaoting-money.moneyfordiscussion', 0);
+
+        if ($money < 0 && $event->actor->money < abs($money)) {
+            throw new ValidationException([
+                'money' => app()->translator->trans('shebaoting-money.forum.errors.not_enough_money')
+            ]);
+        }
+    }
+
+    /**
+     * 当帖子发布时，处理发帖或回帖的积分扣除及回馈
+     */
+    public function postWasPosted(Posted $event)
+    {
+        // 获取发帖用户和讨论信息
+        $user = $event->actor;
+        $discussionAuthor = $event->post->discussion->user; // 被回复的讨论作者
+        $discussionTitle = $event->post->discussion->title;
+
+        // 发帖类型判断：新帖或回帖
+        if ($event->post['number'] === 1) {
+            // 新帖逻辑
+            $this->handleNewPost($user, $event->post, $discussionTitle);
+        } else {
+            // 回帖逻辑
+            $this->handleReplyPost($user, $discussionAuthor, $event->post, $discussionTitle);
+        }
+    }
+
+    /**
+     * 处理新帖的积分变动
+     */
+    private function handleNewPost($user, $post, $discussionTitle)
+    {
+        // 获取新帖积分设置
+        $moneyForPost = (float)$this->settings->get('shebaoting-money.moneyforpost', 0);
+        $typeForPost = $this->settings->get('shebaoting-money.moneyforpost_type', 'deduct'); // 'reward' or 'deduct'
+
+        // 确定积分变动金额
+        $amount = ($typeForPost === 'deduct') ? -abs($moneyForPost) : abs($moneyForPost);
+
+        // 检查是否有足够的积分
+        if ($amount < 0 && $user->money < abs($amount)) {
+            throw new ValidationException([
+                'money' => app()->translator->trans('shebaoting-money.forum.errors.not_enough_money')
+            ]);
+        }
+
+        // 生成讨论的 URL
+        $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $post->discussion->id, 'slug' => $post->discussion->slug]);
+
+        // 创建描述
+        $description = app()->translator->trans('shebaoting-money.forum.logs_description.post_created', [
+            'title' => $discussionTitle,
+            'url' => $discussionUrl
+        ]);
+
+        // 扣除或奖励积分
+        $this->giveMoney($user, $amount, ($typeForPost === 'deduct') ? 'post_deduct' : 'post_reward', $description, null, $post, $post->discussion);
+    }
+
+    /**
+     * 处理回帖的积分变动
+     */
+    private function handleReplyPost($user, $discussionAuthor, $post, $discussionTitle)
+    {
+        // 获取回帖积分设置
+        $minimumLength = (int)$this->settings->get('shebaoting-money.postminimumlength', 0);
+        $moneyForReply = (float)$this->settings->get('shebaoting-money.moneyforreply', 0);
+        $typeForReply = $this->settings->get('shebaoting-money.moneyforreply_type', 'deduct'); // 'reward' or 'deduct'
+        $feedback = $this->settings->get('shebaoting-money.moneyforreply_feedback', 'no_feedback'); // 'feedback' or 'no_feedback'
+
+        // 确认内容长度满足要求
+        if (strlen($post->content) >= $minimumLength) {
+            // 确定扣除或奖励金额
+            $amount = ($typeForReply === 'deduct') ? -abs($moneyForReply) : abs($moneyForReply);
+
+            // 检查是否有足够的积分
+            if ($amount < 0 && $user->money < abs($amount)) {
+                throw new ValidationException([
+                    'money' => app()->translator->trans('shebaoting-money.forum.errors.not_enough_money')
+                ]);
+            }
+
+            // 生成讨论的 URL
+            $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $post->discussion->id, 'slug' => $post->discussion->slug]);
+
+            // 创建描述
+            $description = app()->translator->trans('shebaoting-money.forum.logs_description.posted_reply', [
+                'title' => $discussionTitle,
+                'url' => $discussionUrl
+            ]);
+
+            // 扣除或奖励回帖用户的积分，并记录 target_user_id 为讨论作者
+            $this->giveMoney($user, $amount, ($typeForReply === 'deduct') ? 'withdrawal' : 'post_reward', $description, $discussionAuthor, $post, $post->discussion);
+
+            // 如果启用了反馈，给被回复的作者增加积分
+            if ($feedback === 'feedback' && $user->id !== $discussionAuthor->id) {
+                $feedbackAmount = abs($moneyForReply);
+
+                // 创建反馈描述
+                $feedbackDescription = app()->translator->trans('shebaoting-money.forum.logs_description.reply_received', [
+                    'username' => $user->username,
+                    'title' => $discussionTitle,
+                    'url' => $discussionUrl
+                ]);
+
+                // 给被回复的作者增加积分，设置 target_user_id 为回帖用户
+                $this->giveMoney($discussionAuthor, $feedbackAmount, 'reply_received', $feedbackDescription, $user, $post, $post->discussion);
+            }
+        }
+    }
+
+    /**
+     * 当帖子被恢复时，如果之前因为隐藏被扣除金额，则恢复金额
+     */
+    public function postWasRestored(PostRestored $event)
+    {
+        if ($this->autoremove == AutoRemoveEnum::HIDDEN) {
+            $minimumLength = (int)$this->settings->get('shebaoting-money.postminimumlength', 0);
+            $moneyForReply = (float)$this->settings->get('shebaoting-money.moneyforreply', 0);
+            $typeForReply = $this->settings->get('shebaoting-money.moneyforreply_type', 'deduct'); // 'reward' or 'deduct'
+
+            if (strlen($event->post->content) >= $minimumLength) {
+                // 恢复金额与扣除金额相反
+                $amount = ($typeForReply === 'deduct') ? abs($moneyForReply) : -abs($moneyForReply);
+
+                // 生成讨论的 URL
+                $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $event->post->discussion->id, 'slug' => $event->post->discussion->slug]);
+
+                $description = app()->translator->trans('shebaoting-money.forum.logs_description.post_restored', [
+                    'title' => $event->post->discussion->title,
+                    'url' => $discussionUrl
+                ]);
+
+                $this->giveMoney($event->post->user, $amount, 'post_restored', $description, null, $event->post, $event->post->discussion);
+            }
+        }
+    }
+
+    /**
+     * 当帖子被隐藏时，扣除用户相应的金额
+     */
+    public function postWasHidden(PostHidden $event)
+    {
+        if ($this->autoremove == AutoRemoveEnum::HIDDEN) {
+            $minimumLength = (int)$this->settings->get('shebaoting-money.postminimumlength', 0);
+            $moneyForReply = (float)$this->settings->get('shebaoting-money.moneyforreply', 0);
+            $typeForReply = $this->settings->get('shebaoting-money.moneyforreply_type', 'deduct'); // 'reward' or 'deduct'
+
+            if (strlen($event->post->content) >= $minimumLength) {
+                // 确定扣除的金额
+                $amount = ($typeForReply === 'deduct') ? -abs($moneyForReply) : abs($moneyForReply);
+
+                // 生成讨论的 URL
+                $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $event->post->discussion->id, 'slug' => $event->post->discussion->slug]);
+
+                $description = app()->translator->trans('shebaoting-money.forum.logs_description.post_hidden', [
+                    'title' => $event->post->discussion->title,
+                    'url' => $discussionUrl
+                ]);
+
+                $this->giveMoney($event->post->user, $amount, 'post_hidden', $description, null, $event->post, $event->post->discussion);
+            }
+        }
+    }
+
+    /**
+     * 当帖子被删除时，扣除用户相应的金额
+     */
+    public function postWasDeleted(PostDeleted $event)
+    {
+        if ($this->autoremove == AutoRemoveEnum::DELETED && $event->post->type == 'comment') {
+            $minimumLength = (int)$this->settings->get('shebaoting-money.postminimumlength', 0);
+            $moneyForReply = (float)$this->settings->get('shebaoting-money.moneyforreply', 0);
+            $typeForReply = $this->settings->get('shebaoting-money.moneyforreply_type', 'deduct'); // 'reward' or 'deduct'
+
+            if (strlen($event->post->content) >= $minimumLength) {
+                // 确定扣除的金额
+                $amount = ($typeForReply === 'deduct') ? -abs($moneyForReply) : abs($moneyForReply);
+
+                // 生成讨论的 URL
+                $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $event->post->discussion->id, 'slug' => $event->post->discussion->slug]);
+
+                $description = app()->translator->trans('shebaoting-money.forum.logs_description.post_deleted', [
+                    'title' => $event->post->discussion->title,
+                    'url' => $discussionUrl
+                ]);
+
+                $this->giveMoney($event->post->user, $amount, 'post_deleted', $description, null, $event->post, $event->post->discussion);
+            }
+        }
+    }
+
+    /**
+     * 当讨论被发起时，奖励或扣除发起人的金额
+     */
+    public function discussionWasStarted(Started $event)
+    {
+        // 不处理自己发起的讨论
+        if ($event->actor->id === $event->discussion->user->id) {
+            return;
+        }
+
+        $moneyForDiscussion = (float)$this->settings->get('shebaoting-money.moneyfordiscussion', 0);
+        $typeForDiscussion = $this->settings->get('shebaoting-money.moneyfordiscussion_type', 'reward'); // 'reward' or 'deduct'
+
+        // 确定金额的正负
+        $amount = ($typeForDiscussion === 'deduct') ? -abs($moneyForDiscussion) : abs($moneyForDiscussion);
+
+        if ($amount < 0 && $event->actor->money < abs($amount)) {
+            throw new ValidationException([
+                'money' => app()->translator->trans('shebaoting-money.forum.errors.not_enough_money')
+            ]);
+        }
+
+        // 生成讨论的 URL
+        $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $event->discussion->id, 'slug' => $event->discussion->slug]);
+
+        $description = app()->translator->trans('shebaoting-money.forum.logs_description.discussion_started', [
+            'title' => $event->discussion->title,
+            'url' => $discussionUrl
+        ]);
+
+        $this->giveMoney($event->actor, $amount, ($typeForDiscussion === 'deduct') ? 'discussion_deduct' : 'discussion_reward', $description, null, null, $event->discussion);
+    }
+
+    /**
+     * 当讨论被恢复时，如果之前因为隐藏被扣除金额，则恢复金额
+     */
+    public function discussionWasRestored(DiscussionRestored $event)
+    {
+        if ($this->autoremove == AutoRemoveEnum::HIDDEN) {
+            $moneyForDiscussion = (float)$this->settings->get('shebaoting-money.moneyfordiscussion', 0);
+            $typeForDiscussion = $this->settings->get('shebaoting-money.moneyfordiscussion_type', 'reward'); // 'reward' or 'deduct'
+
+            // 恢复金额与扣除金额相反
+            $amount = ($typeForDiscussion === 'deduct') ? abs($moneyForDiscussion) : -abs($moneyForDiscussion);
+
+            // 生成讨论的 URL
+            $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $event->discussion->id, 'slug' => $event->discussion->slug]);
+
+            $description = app()->translator->trans('shebaoting-money.forum.logs_description.discussion_restored', [
+                'title' => $event->discussion->title,
+                'url' => $discussionUrl
+            ]);
+
+            $this->giveMoney($event->discussion->user, $amount, 'discussion_restored', $description, null, null, $event->discussion);
+        }
+    }
+
+    /**
+     * 当讨论被隐藏时，扣除用户相应的金额
+     */
+    public function discussionWasHidden(DiscussionHidden $event)
+    {
+        if ($this->autoremove == AutoRemoveEnum::HIDDEN) {
+            $moneyForDiscussion = (float)$this->settings->get('shebaoting-money.moneyfordiscussion', 0);
+            $typeForDiscussion = $this->settings->get('shebaoting-money.moneyfordiscussion_type', 'deduct'); // 'reward' or 'deduct'
+
+            // 确定扣除的金额
+            $amount = ($typeForDiscussion === 'deduct') ? -abs($moneyForDiscussion) : abs($moneyForDiscussion);
+
+            // 生成讨论的 URL
+            $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $event->discussion->id, 'slug' => $event->discussion->slug]);
+
+            $description = app()->translator->trans('shebaoting-money.forum.logs_description.discussion_hidden', [
+                'title' => $event->discussion->title,
+                'url' => $discussionUrl
+            ]);
+
+            $this->giveMoney($event->discussion->user, $amount, 'discussion_hidden', $description, null, null, $event->discussion);
+        }
+    }
+
+    /**
+     * 当讨论被删除时，扣除用户相应的金额
+     */
+    public function discussionWasDeleted(DiscussionDeleted $event)
+    {
+        if ($this->autoremove == AutoRemoveEnum::DELETED) {
+            $moneyForDiscussion = (float)$this->settings->get('shebaoting-money.moneyfordiscussion', 0);
+            $typeForDiscussion = $this->settings->get('shebaoting-money.moneyfordiscussion_type', 'deduct'); // 'reward' or 'deduct'
+
+            // 确定扣除的金额
+            $amount = ($typeForDiscussion === 'deduct') ? -abs($moneyForDiscussion) : abs($moneyForDiscussion);
+
+            // 生成讨论的 URL
+            $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $event->discussion->id, 'slug' => $event->discussion->slug]);
+
+            $description = app()->translator->trans('shebaoting-money.forum.logs_description.discussion_deleted', [
+                'title' => $event->discussion->title,
+                'url' => $discussionUrl
+            ]);
+
+            $this->giveMoney($event->discussion->user, $amount, 'discussion_deleted', $description, null, null, $event->discussion);
+        }
+    }
+
+    /**
+     * 当用户信息保存时，检查并处理金钱变动
+     */
+    public function userWillBeSaved(SavingUser $event)
+    {
+        $attributes = Arr::get($event->data, 'attributes', []);
+
+        if (array_key_exists('money', $attributes)) {
+            $user = $event->user;
+            $actor = $event->actor;
+            $oldMoney = $user->money;
+
+            // 检查管理员是否有权限编辑积分
+            $actor->assertCan('edit_money', $user);
+
+            // 获取新积分值
+            $newMoney = (float)$attributes['money'];
+
+            // 计算积分变动量
+            $amount = $newMoney - $oldMoney;
+
+            // 根据amount的正负值前面加上 '+' 或者 '-' 符号
+            $formattedAmount = ($amount > 0 ? '+' : '') . $amount;
+
+            // 创建描述
+            $description = app()->translator->trans('shebaoting-money.forum.logs_description.admin_updated', [
+                'amount' => $formattedAmount
+            ]);
+
+            // 记录日志，描述为管理员直接设置的积分值
+            $this->giveMoney($user, $amount, 'admin_updated', $description, null, null, null);
+        }
+    }
+
+
+
+
+
+    /**
+     * 当帖子被点赞时，奖励或扣除用户相应的金额
+     */
+    public function postWasLiked(PostWasLiked $event)
+    {
+        // 不处理自己点赞自己
+        if ($event->actor->id === $event->post->user->id) {
+            return;
+        }
+
+        $moneyForLike = (float)$this->settings->get('shebaoting-money.moneyforlike', 0);
+        $typeForLike = $this->settings->get('shebaoting-money.moneyforlike_type', 'reward'); // 'reward' or 'deduct'
+        $feedbackLike = $this->settings->get('shebaoting-money.moneyforlike_feedback', 'no_feedback'); // 'feedback' or 'no_feedback'
+
+        $user = $event->actor; // 点赞的用户
+        $postAuthor = $event->post->user; // 被点赞的帖子作者
+        $discussionTitle = $event->post->discussion->title;
+
+        // 确定金额的正负
+        $amount = ($typeForLike === 'deduct') ? -abs($moneyForLike) : abs($moneyForLike);
+
+        if ($typeForLike === 'deduct') {
+            if ($user->money < abs($moneyForLike)) {
+                throw new ValidationException([
+                    'money' => app()->translator->trans('shebaoting-money.forum.errors.not_enough_money')
+                ]);
+            }
+        }
+
+        // 生成讨论的 URL
+        $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $event->post->discussion->id, 'slug' => $event->post->discussion->slug]);
+
+        // 给予点赞的用户奖励或扣除
+        $action = ($typeForLike === 'deduct') ? 'liked_deduct' : 'liked_reward';
+        $description = app()->translator->trans('shebaoting-money.forum.logs_description.liked', [
+            'title' => $discussionTitle,
+            'url' => $discussionUrl,
+            'user' => $postAuthor->username
+        ]);
+        $this->giveMoney($user, $amount, $action, $description, $postAuthor, $event->post, $event->post->discussion);
+
+        // 如果设置为回馈作者，且点赞用户不是作者本人
+        if ($feedbackLike === 'feedback' && $user->id !== $postAuthor->id) {
+            // 回馈金额始终为正数
+            $feedbackAmount = abs($moneyForLike);
+
+            // 创建反馈描述
+            $feedbackDescription = app()->translator->trans('shebaoting-money.forum.logs_description.liked_by', [
+                'username' => $user->username,
+                'title' => $discussionTitle,
+                'url' => $discussionUrl
+            ]);
+
+            // 给被点赞的作者增加积分
+            $this->giveMoney($postAuthor, $feedbackAmount, 'liked_by', $feedbackDescription, $user, $event->post, $event->post->discussion);
+        }
+    }
+
+    /**
+     * 当帖子取消点赞时，撤销积分变动
+     */
+    public function postWasUnliked(PostWasUnliked $event)
+    {
+        $moneyForLike = (float)$this->settings->get('shebaoting-money.moneyforlike', 0);
+        $typeForLike = $this->settings->get('shebaoting-money.moneyforlike_type', 'reward'); // 'reward' or 'deduct'
+        $feedbackLike = $this->settings->get('shebaoting-money.moneyforlike_feedback', 'no_feedback'); // 'feedback' or 'no_feedback'
+
+        $user = $event->actor; // 取消点赞的用户
+        $postAuthor = $event->post->user; // 被点赞的帖子作者
+        $discussionTitle = $event->post->discussion->title;
+
+        // 生成讨论的 URL
+        $discussionUrl = $this->url->to('forum')->route('discussion', ['id' => $event->post->discussion->id, 'slug' => $event->post->discussion->slug]);
+
+        if ($typeForLike === 'deduct') {
+            // 撤销扣除，即返还积分
+            $amount = abs($moneyForLike);
+            $action = 'unliked_refund';
+            $description = app()->translator->trans('shebaoting-money.forum.logs_description.unliked_post', [
+                'title' => $discussionTitle,
+                'url' => $discussionUrl,
+                'user' => $postAuthor->username
+            ]);
+            $this->giveMoney($user, $amount, $action, $description, $postAuthor, $event->post, $event->post->discussion);
+
+            // 如果设置为回馈作者，且点赞用户不是作者本人
+            if ($feedbackLike === 'feedback' && $user->id !== $postAuthor->id) {
+                // 撤销回馈给作者的积分
+                $feedbackAmount = abs($moneyForLike);
+
+                // 创建反馈描述
+                $feedbackDescription = app()->translator->trans('shebaoting-money.forum.logs_description.unliked_by', [
+                    'username' => $user->username,
+                    'title' => $discussionTitle,
+                    'url' => $discussionUrl
+                ]);
+
+                $this->giveMoney($postAuthor, -$feedbackAmount, 'unliked_by', $feedbackDescription, $user, $event->post, $event->post->discussion);
+            }
+        } else {
+            // 如果是奖励，则撤销奖励，即扣除积分
+            $amount = -abs($moneyForLike);
+            $action = 'unliked_deduct';
+            $description = app()->translator->trans('shebaoting-money.forum.logs_description.unliked_by', [
+                'title' => $discussionTitle,
+                'url' => $discussionUrl,
+                'user' => $user->username
+            ]);
+            $this->giveMoney($postAuthor, $amount, $action, $description, $user, $event->post, $event->post->discussion);
+        }
+    }
+}
+
+```
+
